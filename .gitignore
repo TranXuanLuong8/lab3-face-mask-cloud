@@ -1,10 +1,5 @@
 .venv/
 __pycache__/
-*.py[cod]
-*.db
-.env
-.env.*
-!.env.example
 .pytest_cache/
 .mypy_cache/
 *.log
