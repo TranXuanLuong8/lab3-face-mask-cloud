@@ -4,5 +4,5 @@ gunicorn==23.0.0
 numpy==2.5.4
 opencv-python-headless==4.14.0.94
 onnxruntime==1.31.0
-psycopg[binary]==3.2.3
+psycopg[binary]
 requests==2.32.3
