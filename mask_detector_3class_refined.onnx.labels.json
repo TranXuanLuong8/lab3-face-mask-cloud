@@ -1,0 +1,12 @@
+{
+  "class_names": [
+    "mask",
+    "no_mask",
+    "incorrect_mask"
+  ],
+  "face_padding": {
+    "sides": 0.25,
+    "top": 0.1,
+    "bottom": 0.5
+  }
+}

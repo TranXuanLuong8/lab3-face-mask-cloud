@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LAB 3-2 Face Mask Cloud</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1020; --card:#151d33; --line:#2b3858; --text:#edf2ff; --muted:#9aa9cb; --accent:#6c8cff; --ok:#34d399; --warn:#fb923c; --bad:#fb7185; }
+    * { box-sizing:border-box; } body { margin:0; font:15px system-ui,sans-serif; color:var(--text); background:radial-gradient(circle at 10% 0,#1b2850,var(--bg) 45%); }
+    header,main { max-width:1200px; margin:auto; padding:22px; } header { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+    h1,h2,p { margin:0; } h1 { font-size:clamp(1.3rem,3vw,2rem); } .muted { color:var(--muted); margin-top:5px; }
+    button { border:0; border-radius:9px; padding:11px 16px; background:var(--accent); color:white; font-weight:700; cursor:pointer; } button:disabled { opacity:.55; cursor:wait; }
+    main { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(300px,.65fr); gap:18px; }
+    .card { background:rgba(21,29,51,.9); border:1px solid var(--line); border-radius:16px; padding:18px; box-shadow:0 12px 30px #0003; }
+    video { display:block; width:100%; aspect-ratio:4/3; object-fit:cover; border-radius:11px; background:#070a13; transform:scaleX(-1); } .actions { display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; }
+    .result { font-size:1.5rem; font-weight:800; margin-bottom:5px; } .confidence { color:var(--ok); } .bar { height:8px; background:#27324b; border-radius:10px; overflow:hidden; margin:6px 0 13px; } .fill { height:100%; background:var(--accent); }
+    .metric-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; margin-top:16px; } .metric { border:1px solid var(--line); border-radius:10px; padding:11px; } .metric b { display:block; font-size:1.25rem; margin-top:4px; } .metric small { color:var(--muted); }
+    table { width:100%; border-collapse:collapse; margin-top:12px; font-size:.85rem; } th,td { text-align:left; padding:9px 6px; border-bottom:1px solid var(--line); } th { color:var(--muted); } .status { margin-top:12px; color:var(--muted); min-height:22px; }
+    @media (max-width:800px) { main { grid-template-columns:1fr; padding-top:0; } header { align-items:flex-start; flex-direction:column; } .metric-grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<header>
+  <div><h1>LAB 3-2 — Face Mask Cloud</h1><p class="muted">Website + backend + model + database chạy trên Cloud</p></div>
+  <button id="start">Bắt đầu camera</button>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="actions"><button id="telegram">Bật/tắt Telegram</button><button id="refresh">Tải lịch sử</button></div>
+      <p id="status" class="status">Nhấn “Bắt đầu camera” để chạy.</p>
+    </div>
+    <div class="card" style="margin-top:18px"><h2>Lịch sử nhận dạng</h2><table><thead><tr><th>Nhãn</th><th>Confidence</th><th>Cloud ms</th><th>Total ms</th></tr></thead><tbody id="history"></tbody></table></div>
+  </section>
+  <aside class="card">
+    <h2 id="label" class="result">Chưa có kết quả</h2><p id="confidence" class="confidence">—</p>
+    <div id="probabilities"></div>
+    <div class="metric-grid">
+      <div class="metric"><small>Suy luận Cloud</small><b id="inference">—</b></div>
+      <div class="metric"><small>RTT local ↔ Cloud</small><b id="rtt">—</b></div>
+      <div class="metric"><small>Toàn trình</small><b id="total">—</b></div>
+    </div>
+    <p class="status">Model được load và chạy bằng ONNX Runtime trên backend Cloud. Model SHA-256: <code>{{ model_sha256[:12] }}</code></p>
+  </aside>
+</main>
+<script>
+const video = document.querySelector('#video'), start = document.querySelector('#start'), statusEl = document.querySelector('#status');
+let stream, running = false, busy = false;
+const names = {mask:'Đeo khẩu trang', no_mask:'Không đeo khẩu trang', incorrect_mask:'Đeo khẩu trang sai cách'};
+function setStatus(text) { statusEl.textContent = text; }
+function renderResult(data, rtt, total) {
+  document.querySelector('#label').textContent = data.display_label;
+  document.querySelector('#confidence').textContent = data.face_count ? `Độ tin cậy: ${(data.confidence*100).toFixed(1)}%` : 'Không tìm thấy khuôn mặt';
+  document.querySelector('#inference').textContent = `${data.inference_ms.toFixed(1)} ms`;
+  document.querySelector('#rtt').textContent = `${rtt.toFixed(1)} ms`;
+  document.querySelector('#total').textContent = `${total.toFixed(1)} ms`;
+  document.querySelector('#probabilities').innerHTML = Object.entries(data.probabilities).map(([key,value]) =>
+    `<div>${names[key]} <strong>${(value*100).toFixed(1)}%</strong><div class="bar"><div class="fill" style="width:${value*100}%"></div></div></div>`).join('');
+}
+function frameBlob() { return new Promise(resolve => { const canvas=document.createElement('canvas'); canvas.width=video.videoWidth; canvas.height=video.videoHeight; const ctx=canvas.getContext('2d'); ctx.translate(canvas.width,0); ctx.scale(-1,1); ctx.drawImage(video,0,0); canvas.toBlob(resolve,'image/jpeg',.82); }); }
+async function recognize() {
+  if (!running || busy || video.readyState < 2) return;
+  busy = true; const capture = performance.now(), blob = await frameBlob(), sent = performance.now();
+  try {
+    const form = new FormData(); form.append('image', blob, 'frame.jpg');
+    const response = await fetch('/predict', {method:'POST', body:form}); const received = performance.now();
+    const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Cloud inference failed');
+    const rtt = received-sent, total = received-capture; renderResult(data,rtt,total); setStatus(`Đã nhận kết quả từ Cloud · ${new Date().toLocaleTimeString()}`);
+    await fetch(`/history?limit=20`).then(r=>r.json()).then(renderHistory);
+  } catch (error) { setStatus(`Lỗi: ${error.message}`); } finally { busy=false; }
+}
+function renderHistory(rows) { document.querySelector('#history').innerHTML = rows.map(row => `<tr><td>${names[row.label] || row.label}</td><td>${(row.confidence*100).toFixed(1)}%</td><td>${Number(row.inference_ms||0).toFixed(1)}</td><td>${Number(row.total_ms||0).toFixed(1)}</td></tr>`).join(''); }
+async function cameraLoop() { while(running) { await recognize(); await new Promise(resolve=>setTimeout(resolve,450)); } }
+start.onclick = async () => { if (running) { running=false; stream?.getTracks().forEach(track=>track.stop()); start.textContent='Bắt đầu camera'; return; } try { stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480}}}); video.srcObject=stream; running=true; start.textContent='Dừng camera'; cameraLoop(); } catch(error) { setStatus(`Không mở được camera: ${error.message}`); } };
+document.querySelector('#refresh').onclick = () => fetch('/history?limit=20').then(r=>r.json()).then(renderHistory);
+document.querySelector('#telegram').onclick = () => fetch('/telegram-toggle',{method:'POST'}).then(r=>r.json()).then(data=>setStatus(`Telegram: ${data.enabled ? 'ON' : 'OFF'}`));
+document.querySelector('#refresh').click();
+</script>
+</body>
+</html>
